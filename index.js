@@ -40,7 +40,7 @@ transporter.verify((err) => {
 
 
 
-const ADMIN_EMAIL = "Karanmishra0250@gmail.com";
+const ADMIN_EMAIL = "Vanshk67932@gmail.com";
 
 const sendAdminMail = async (subject, data) => {
   try {
